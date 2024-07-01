@@ -1,12 +1,8 @@
-// Import MongoClient from mongodb library
 import { MongoClient } from 'mongodb';
 
-// Define environment variables for DB connection details (with defaults)
 const HOST = process.env.DB_HOST || 'localhost';
 const PORT = process.env.DB_PORT || 27017;
 const DATABASE = process.env.DB_DATABASE || 'files_manager';
-
-// Construct connection URL string from environment variables
 const url = `mongodb://${HOST}:${PORT}`;
 
 class DBClient {
@@ -42,7 +38,6 @@ class DBClient {
 	}
 }
 
-// Create and export a new instance of DBClient
 const dbClient = new DBClient();
 module.exports = dbClient;
 

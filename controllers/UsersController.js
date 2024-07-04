@@ -1,86 +1,64 @@
+import { ObjectId } from 'mongodb';
 import sha1 from 'sha1';
-import { ObjectID } from 'mongodb';
 import Queue from 'bull';
 import dbClient from '../utils/db';
-import redisClient from '../utils/redis';
+import userUtils from '../utils/user';
 
-const userQueue = new Queue('userQueue', 'redis://127.0.0.1:6379');
+const userQueue = new Queue('userQueue');
 
 class UsersController {
+  // try a new method of thinking
   static async postNew(request, response) {
     const { email, password } = request.body;
 
-    if (!email) {
-      response.status(400).json({ error: 'Missing email' });
-      return;
-    }
-    if (!password) {
-      response.status(400).json({ error: 'Missing password' });
-      return;
+    if (!email) return response.status(400).send({ error: 'Missing email' });
+
+    if (!password) { return response.status(400).send({ error: 'Missing password' }); }
+
+    const emailExists = await dbClient.usersCollection.findOne({ email });
+
+    if (emailExists) { return response.status(400).send({ error: 'Already exist' }); }
+
+    const sha1Password = sha1(password);
+
+    let result;
+    try {
+      result = await dbClient.usersCollection.insertOne({
+        email,
+        password: sha1Password,
+      });
+    } catch (err) {
+      await userQueue.add({});
+      return response.status(500).send({ error: 'Error creating user.' });
     }
 
-    try {
-      const users = dbClient.db.collection('users');
-      const user = await users.findOne({ email });
-      if (user) {
-        response.status(400).json({ error: 'Email address already in use' });
-      } else {
-        const hashedPassword = sha1(password);
-        const result = await users.insertOne({
-          email,
-          password: hashedPassword,
-        });
-        response.status(201).json({ id: result.insertedId, email });
-        userQueue.add({ userId: result.insertedId });
-      }
-    } catch (error) {
-      console.error(error);
-      response.status(500).json({ error: 'Internal server error' });
-    }
+    const user = {
+      id: result.insertedId,
+      email,
+    };
+
+    await userQueue.add({
+      userId: result.insertedId.toString(),
+    });
+
+    return response.status(201).send(user);
   }
 
   static async getMe(request, response) {
-    const token = request.header('X-Token');
-    const key = `auth_${token}`;
-    const userId = await redisClient.get(key);
+    const { userId } = await userUtils.getUserIdAndKey(request);
 
-    if (userId) {
-      try {
-        const users = dbClient.db.collection('users');
-        const idObject = new ObjectID(userId);
-        const user = await users.findOne({ _id: idObject });
-        if (user) {
-          response.status(200).json({ id: userId, email: user.email });
-        } else {
-          response.status(401).json({ error: 'Unauthorized' });
-        }
-      } catch (error) {
-        console.error(error);
-        response.status(500).json({ error: 'Internal server error' });
-      }
-    } else {
-      console.log('Hupatikani!');
-      response.status(401).json({ error: 'Unauthorized' });
-    }
-  }
+    const user = await userUtils.getUser({
+      _id: ObjectId(userId),
+    });
 
-  static async checkEmail(request, response) {
-    const { email } = request.query;
+    if (!user) return response.status(401).send({ error: 'Unauthorized' });
 
-    if (!email) {
-      response.status(400).json({ error: 'Missing email' });
-      return;
-    }
+    const processedUser = { id: user._id, ...user };
+    delete processedUser._id;
+    delete processedUser.password;
 
-    try {
-      const users = dbClient.db.collection('users');
-      const user = await users.findOne({ email });
-      response.status(200).json({ isUnique: !user });
-    } catch (error) {
-      console.error(error);
-      response.status(500).json({ error: 'Internal server error' });
-    }
+    return response.status(200).send(processedUser);
   }
 }
 
-module.exports = UsersController;
+export default UsersController;
